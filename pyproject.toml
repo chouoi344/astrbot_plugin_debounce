@@ -7,3 +7,4 @@ select = ["E4", "E7", "E9", "F", "I", "UP", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/test_behavior.py" = ["E402"]
+"tests/test_version_compatibility.py" = ["E402"]

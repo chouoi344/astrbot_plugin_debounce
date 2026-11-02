@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+import astrbot
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import At, Image, Plain, Reply
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
 
 from .adaptive_timer import AdaptiveSettings, adaptive_wait
@@ -18,6 +21,21 @@ from .quote_parser import QuotedMessage, parse_quote
 from .typing_detector import is_notice, parse_notice
 
 SessionKey = tuple[str, str]
+
+
+def _message_event_hook(handler):
+    """在类加载前检查消息 API，避免缺少装饰器时插件直接导入失败。"""
+    register = getattr(filter, "event_message_type", None)
+    all_messages = getattr(getattr(filter, "EventMessageType", None), "ALL", None)
+    if callable(register) and all_messages is not None:
+        return register(all_messages, priority=100)(handler)
+    return handler
+
+
+def _legacy_llm_hook(handler):
+    """缺少旧版请求钩子的定制宿主继续使用早期消息入口。"""
+    register = getattr(filter, "on_llm_request", None)
+    return register(priority=100)(handler) if callable(register) else handler
 
 
 class DebouncePlugin(Star):
@@ -30,6 +48,33 @@ class DebouncePlugin(Star):
         self.sessions: dict[SessionKey, SessionState] = {}
         self._finishing: dict[int, SessionState] = {}
         self._closed = False
+        self._detect_version_support()
+
+    def _detect_version_support(self) -> None:
+        """将运行版本与消息 API 分开检测，按版本选择基础或增强模式。"""
+        register = getattr(filter, "event_message_type", None)
+        all_messages = getattr(getattr(filter, "EventMessageType", None), "ALL", None)
+        self.supports_message_events = callable(register) and all_messages is not None
+        self.astrbot_version = str(getattr(astrbot, "__version__", "unknown"))
+        match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?", self.astrbot_version)
+        version = tuple(int(part or 0) for part in match.groups()) if match else None
+        prerelease = bool(
+            match and re.search(r"(?:a|b|rc|dev)\d*", self.astrbot_version[match.end() :])
+        )
+        self.supports_enhanced_events = bool(
+            self.supports_message_events
+            and version is not None
+            and version >= (4, 29, 0)
+            and not prerelease
+        )
+        self.legacy_mode = not self.supports_enhanced_events
+        if not self.supports_message_events:
+            # 官方受支持版本均提供该 API。定制宿主缺失时直通，避免锁内等待。
+            logger.warning("[消息防抖] 宿主缺少 event_message_type API，已停用防抖并放行消息")
+        elif self.legacy_mode:
+            logger.info(
+                f"[消息防抖] AstrBot {self.astrbot_version} 使用基础防抖，输入感知和撤回过滤停用"
+            )
 
     @staticmethod
     def _now() -> float:
@@ -38,8 +83,31 @@ class DebouncePlugin(Star):
 
     @staticmethod
     def _key(event: AstrMessageEvent) -> SessionKey:
-        """统一来源包含适配器实例，账号再单独作为一道隔离。"""
-        return str(event.get_self_id()), str(event.unified_msg_origin)
+        """优先使用统一来源；旧事件用平台实例、消息类型与会话重建来源。"""
+        message = getattr(event, "message_obj", None)
+        get_self_id = getattr(event, "get_self_id", None)
+        account = get_self_id() if callable(get_self_id) else getattr(message, "self_id", "")
+        origin = getattr(event, "unified_msg_origin", None)
+        if origin:
+            return str(account), str(origin)
+        get_platform_id = getattr(event, "get_platform_id", None)
+        platform_meta = getattr(event, "platform_meta", None) or getattr(event, "platform", None)
+        platform_id = get_platform_id() if callable(get_platform_id) else None
+        platform_id = platform_id or getattr(platform_meta, "id", None)
+        if not platform_id:
+            get_platform_name = getattr(event, "get_platform_name", None)
+            platform_id = get_platform_name() if callable(get_platform_name) else "unknown-platform"
+        message_type = getattr(message, "type", None)
+        message_type = getattr(message_type, "value", message_type) or "FriendMessage"
+        session_id = getattr(event, "session_id", None) or getattr(message, "session_id", None)
+        if not session_id:
+            get_sender_id = getattr(event, "get_sender_id", None)
+            session_id = (
+                get_sender_id()
+                if callable(get_sender_id)
+                else getattr(getattr(message, "sender", None), "user_id", "")
+            )
+        return str(account), f"{platform_id}:{message_type}:{session_id}"
 
     def _is_command(self, text: str) -> bool:
         """识别有效的非空前缀，兼容消息前导空白。"""
@@ -55,7 +123,12 @@ class DebouncePlugin(Star):
     def _silence(event: AstrMessageEvent) -> None:
         """停止插件传播和默认 LLM 路径，保留框架停止标记。"""
         # 显式关闭默认 LLM 路径，并保留 STOP 结果给后续管线检查。
-        event.should_call_llm(True)
+        should_call_llm = getattr(event, "should_call_llm", None)
+        if callable(should_call_llm):
+            should_call_llm(True)
+        else:
+            event.call_llm = True
+        event._debounce_suppressed = True
         event.stop_event()
 
     @staticmethod
@@ -156,6 +229,8 @@ class DebouncePlugin(Star):
 
     def _handle_notice(self, event: AstrMessageEvent) -> None:
         """将受支持的私聊通知更新到同一账号与会话的缓存。"""
+        if not self.supports_enhanced_events:
+            return
         notice = parse_notice(event)
         if notice is None:
             return
@@ -244,6 +319,7 @@ class DebouncePlugin(Star):
         message.message_str = text
         message.message = components
         message.message_id = state.buffer.items[-1].message_id
+        state.event._debounce_merged = True
         # 更新 OneBot 原始链，避免读取 raw_message 的下游插件拿到旧正文。
         if (
             isinstance(message.raw_message, dict)
@@ -258,12 +334,16 @@ class DebouncePlugin(Star):
             message.raw_message = raw
         logger.debug(f"[消息防抖] 已合并 {len(state.buffer.items)} 条消息、{len(images)} 张图片")
 
-    @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
+    @_message_event_hook
     async def handle_message(self, event: AstrMessageEvent) -> None:
         """通知只更新状态；普通私聊在早期消息钩子收集，不占用 LLM 会话锁。"""
-        if self._closed or not self.config.get("enabled", True):
+        if self._closed or not self.config.get("enabled", True) or not self.supports_message_events:
+            return
+        if getattr(event, "_debounce_collected", False):
             return
         if is_notice(event):
+            if not self.supports_enhanced_events:
+                return
             if event.is_private_chat() and parse_notice(event) is not None:
                 self._handle_notice(event)
                 self._silence(event)
@@ -299,6 +379,7 @@ class DebouncePlugin(Star):
             state = SessionState(MessageBuffer(now), event)
             self.sessions[key] = state
         item = BufferedMessage(str(event.message_obj.message_id), text, sources, now)
+        event._debounce_collected = True
         # 即使查询超时，也保留有引用这一事实。
         reply = next(
             (component for component in event.get_messages() if isinstance(component, Reply)), None
@@ -347,6 +428,16 @@ class DebouncePlugin(Star):
             await asyncio.gather(*state.prepare_tasks, return_exceptions=True)
             state.done_event.set()
             self._finishing.pop(id(state), None)
+
+    @_legacy_llm_hook
+    async def on_llm_request_legacy(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
+        """旧版请求阶段兜底阻止被收拢消息；此处立即返回，不重复收集。"""
+        if self._closed or not self.config.get("enabled", True) or not self.legacy_mode:
+            return
+        # 4.26–4.28 的请求钩子在会话锁内执行。防抖等待已在早期消息钩子完成，
+        # 这里仅保留后续消息的停止状态；核心添加的提示前缀和图片加工保持原样。
+        if getattr(event, "_debounce_suppressed", False):
+            self._silence(event)
 
     async def terminate(self) -> None:
         """卸载时唤醒等待者并回收任务，丢弃本轮内存缓存。"""

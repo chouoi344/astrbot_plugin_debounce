@@ -29,7 +29,7 @@
   },
   "enable_typing_detection": {
     "type": "bool", "default": true,
-    "description": "感知输入状态", "hint": "依赖平台上报 input_status。正在输入时暂停普通倒计时，仍保留硬上限。"
+    "description": "感知输入状态", "hint": "AstrBot 4.29+ 生效，依赖平台上报 input_status。正在输入时暂停普通倒计时，仍保留硬上限。"
   },
   "max_typing_wait": {
     "type": "float", "default": 60.0,
@@ -37,6 +37,6 @@
   },
   "enable_recall_filter": {
     "type": "bool", "default": true,
-    "description": "过滤已撤回消息", "hint": "收到 friend_recall 时移除本轮对应的文字、图片和引用，全部撤回后结束本轮。"
+    "description": "过滤已撤回消息", "hint": "AstrBot 4.29+ 生效，收到 friend_recall 时移除本轮对应的文字、图片和引用，全部撤回后结束本轮。"
   }
 }

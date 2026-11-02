@@ -1,21 +1,34 @@
 # 消息防抖
 
-合并用户短时间连续发送的私聊图文，再交给 AstrBot 原有处理流程。采用时间规则，无需额外模型、服务或运行依赖。版本：v1.0.0。
+合并用户短时间连续发送的私聊图文，再交给 AstrBot 原有处理流程。采用时间规则，无需额外模型、服务或运行依赖。版本：v1.0.1。
 
 作者：臭屁 · [GitHub 仓库](https://github.com/chouoi344/astrbot_plugin_debounce) · [版本记录](CHANGELOG.md)
 
 ## 安装
 
-在 AstrBot 插件管理页选择“从链接安装”，填写 `https://github.com/chouoi344/astrbot_plugin_debounce`。也可将整个 `astrbot_plugin_debounce` 文件夹放入 AstrBot 的 `data/plugins/`，重启 AstrBot，在插件管理页配置。兼容声明为 AstrBot `>=4.29.0,<5`、Python 3.10+；接口按 v4.29.0 核对，实际安装还需满足所用 AstrBot 版本自身的 Python 要求。
+在 AstrBot 插件管理页选择“从链接安装”，填写 `https://github.com/chouoi344/astrbot_plugin_debounce`。也可将整个 `astrbot_plugin_debounce` 文件夹放入 AstrBot 的 `data/plugins/`，重启 AstrBot，在插件管理页配置。兼容声明为 AstrBot `>=4.26.0,<5`、Python 3.10+；实际安装还需满足所用 AstrBot 版本自身的 Python 要求。
 
 若已安装另一个同 ID 的 `astrbot_plugin_debounce`，先备份并卸载旧插件，再安装本插件。与其他消息合并插件同时启用时会叠加等待，建议每个会话启用一个防抖插件。市场审核通过后，可在 AstrBot 市场搜索“消息防抖”，选择作者“臭屁”的条目。
+
+## AstrBot 版本与功能
+
+| AstrBot 版本 | 防抖模式 | 输入状态感知 | 撤回过滤 |
+| --- | --- | --- | --- |
+| `4.26.0–4.28.x` | 基础防抖：自适应等待、图文及引用合并、指令放行 | 停用 | 停用 |
+| `>=4.29.0,<5` | 完整防抖 | 平台上报 `input_status` 时生效 | 平台上报 `friend_recall` 时生效 |
+
+这是本插件的版本策略。启动时读取 `astrbot.__version__`，同时检查 `event_message_type` 和 `EventMessageType.ALL`。4.26–4.28 即使打开相关配置，也保持基础模式；升级到 4.29 后自动启用配置所允许的增强功能。版本无法识别或属于预发布版时，保守使用基础模式并记录启动日志。
+
+新旧版本均在早期消息阶段收集与等待。4.26–4.28 的 `on_llm_request_legacy` 在请求阶段兜底拦截已经被收拢的后续消息，立即返回，保留核心对提示词、图片和人格的处理。这样可以避免在模型会话锁内等待造成连续消息串行处理，也避免两个入口重复入队。
+
+事件缺少 `unified_msg_origin` 时，使用平台实例、消息类型、会话 ID 和机器人账号构造隔离键；缺少 `should_call_llm` 方法时，使用事件的 `call_llm` 标志停止默认模型路径。若定制宿主连早期消息 API 也缺失，插件会记录警告并放行消息；官方声明支持的版本均提供该 API。
 
 ## 功能
 
 - 只处理私聊图文；群聊、指令、语音、文件、其他媒体保持原流程。
 - 按平台实例、机器人账号、私聊会话隔离；文字保序，图片按来源去重。
 - 引用输出 `<quoted_message sender="昵称/ID">`，引用机器人时标注 `Bot`。优先读取 Reply 已有内容，缺失时尝试 OneBot `get_msg`；失败保留引用 ID。
-- NapCat/OneBot v11 的 `input_status` 通知控制输入等待，`friend_recall` 通知删除缓冲区对应整条图文和引用。
+- AstrBot 4.29+：NapCat/OneBot v11 的 `input_status` 通知控制输入等待，`friend_recall` 通知删除缓冲区对应整条图文和引用。
 - 缓存只在内存中；卸载、重启时清空本轮缓存，任务一并回收。
 
 ## 配置
@@ -29,9 +42,9 @@
 | `adaptive_max_wait` | `6.0` | 单次最大等待，建议 2–15 秒；低于最小值时自动取最小值。 |
 | `adaptive_max_total_wait` | `12.0` | 首条消息进入后本轮最多收集时间，建议 5–30 秒。 |
 | `adaptive_short_message_threshold` | `10` | 短句字数阈值，建议 5–20。 |
-| `enable_typing_detection` | `true` | 使用平台上报的输入状态；无通知时使用时间防抖。 |
+| `enable_typing_detection` | `true` | 4.29+ 使用平台上报的输入状态；旧版或无通知时使用时间防抖。 |
 | `max_typing_wait` | `60.0` | 单次连续输入的保护时间，建议 10–300 秒；重复输入通知不续期。 |
-| `enable_recall_filter` | `true` | 删除防抖期间收到好友撤回通知的消息。 |
+| `enable_recall_filter` | `true` | 4.29+ 删除防抖期间收到好友撤回通知的消息。 |
 
 单条短消息等待 3 秒，11–50 字等待 2 秒，超过 50 字等待 1.5 秒（短句阈值可调整）。句末 `。！？.!?` 乘以 0.7，末尾 `，,、` 乘以 1.2；缓存包含两条或更多短句且最新消息为短句时，再乘以 1.5，最后限制到单次 min/max 范围。
 
@@ -82,9 +95,9 @@ flowchart TD
 
 ## 平台与常见问题
 
-**输入状态没有效果？** 需要平台实际上报 `input_status`，NapCat/OneBot v11 对应实现可用；其他平台继续时间防抖。输入通知在已有缓存时生效。
+**输入状态没有效果？** 需要 AstrBot 4.29+ 且平台实际上报 `input_status`，NapCat/OneBot v11 对应实现可用；旧版或其他平台继续时间防抖。输入通知在已有缓存时生效。
 
-**撤回后仍有回复？** 撤回过滤适用于本轮缓存内收到 `friend_recall` 的消息。结算后已开始的模型请求继续执行。
+**撤回后仍有回复？** 撤回过滤需要 AstrBot 4.29+，适用于本轮缓存内收到 `friend_recall` 的消息。4.26–4.28 使用基础模式；结算后已开始的模型请求继续执行。
 
 **图片会下载到本地吗？** 远程图片保持 URL，交给 AstrBot 原有识图流程。适配器传入的本地临时图片会读为内存 base64，避免后续事件结束时文件被框架清理；插件不创建图片缓存文件。
 
@@ -104,4 +117,4 @@ flowchart TD
 
 需求来自用户提供的 `codex_plugin_package/codex_prompt.md` 与 `code_reference.md`；对照 `reference_debounce` 和 `reference_continuous_message` 理解缓冲、事件等待、引用和撤回需求。本插件为重新编写的独立实现，未复制两份参考插件的源码或辅助模块。原参考包保持原样，其 AGPL-3.0 许可证继续适用于原参考代码。
 
-本插件使用 [Apache License 2.0](LICENSE)。AstrBot API 核对基准：[v4.29.0 官方源码](https://github.com/AstrBotDevs/AstrBot/tree/v4.29.0)。
+本插件使用 [Apache License 2.0](LICENSE)。AstrBot API 核对基准：[v4.26.0 官方源码](https://github.com/AstrBotDevs/AstrBot/tree/v4.26.0)、[v4.29.0 官方源码](https://github.com/AstrBotDevs/AstrBot/tree/v4.29.0)。
