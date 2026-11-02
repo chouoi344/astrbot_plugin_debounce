@@ -52,6 +52,16 @@ class Reply:
     type: str = field(default="Reply", init=False)
 
 
+@dataclass
+class ProviderRequest:
+    """足以检查兼容钩子是否污染请求内容的请求对象。"""
+
+    prompt: str = ""
+    system_prompt: str = ""
+    image_urls: list[str] = field(default_factory=list)
+    contexts: list[dict[str, Any]] = field(default_factory=list)
+
+
 class FakeEvent:
     def __init__(
         self,
@@ -72,6 +82,9 @@ class FakeEvent:
         self.account = str(account)
         self.private = private
         self.is_at_or_wake_command = awake
+        self.platform_id = platform
+        self.platform_meta = types.SimpleNamespace(id=platform, name="aiocqhttp")
+        self.session_id = user
         self.unified_msg_origin = (
             f"{platform}:{'FriendMessage' if private else 'GroupMessage'}:{user}"
         )
@@ -112,6 +125,12 @@ class FakeEvent:
     def get_messages(self) -> list[Any]:
         return self.message_obj.message
 
+    def get_platform_id(self) -> str:
+        return self.platform_id
+
+    def get_platform_name(self) -> str:
+        return self.platform_meta.name
+
     def stop_event(self) -> None:
         self.stopped = True
 
@@ -134,6 +153,7 @@ def install() -> None:
             "astrbot.api.event",
             "astrbot.api.star",
             "astrbot.api.message_components",
+            "astrbot.api.provider",
         )
     }
     logger = types.SimpleNamespace(
@@ -141,11 +161,14 @@ def install() -> None:
     )
     modules["astrbot.api"].AstrBotConfig = dict
     modules["astrbot.api"].logger = logger
+    modules["astrbot"].__version__ = "4.29.0"
     modules["astrbot.api.event"].AstrMessageEvent = FakeEvent
     modules["astrbot.api.event"].filter = types.SimpleNamespace(
         EventMessageType=types.SimpleNamespace(ALL="all"),
         event_message_type=lambda *args, **kwargs: lambda method: method,
+        on_llm_request=lambda *args, **kwargs: lambda method: method,
     )
+    modules["astrbot.api.provider"].ProviderRequest = ProviderRequest
 
     class Star:
         def __init__(self, context: Any):
