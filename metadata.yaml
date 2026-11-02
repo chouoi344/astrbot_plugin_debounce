@@ -1,0 +1,7 @@
+name: astrbot_plugin_debounce
+display_name: 消息防抖
+desc: 合并连续私聊图文，支持自适应等待、输入状态感知、引用消息及撤回过滤。
+version: v1.0.0
+author: 臭屁
+repo: https://github.com/chouoi344/astrbot_plugin_debounce
+astrbot_version: ">=4.29.0,<5"

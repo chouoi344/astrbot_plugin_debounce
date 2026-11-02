@@ -1,0 +1,42 @@
+{
+  "enabled": {
+    "type": "bool", "default": true,
+    "description": "启用消息防抖", "hint": "只合并私聊中的连续图文消息。"
+  },
+  "command_prefixes": {
+    "type": "list", "default": ["/", "#"],
+    "description": "指令前缀", "hint": "指令先触发已有缓冲区结算，再按原流程处理。空前缀会被忽略。"
+  },
+  "merge_separator": {
+    "type": "string", "default": "\n",
+    "description": "消息分隔符", "hint": "多条消息之间的分隔符，默认换行。"
+  },
+  "adaptive_min_wait": {
+    "type": "float", "default": 1.0,
+    "description": "最小等待时间（秒）", "hint": "建议 0.5–5 秒。接近总等待上限时，剩余时间优先。"
+  },
+  "adaptive_max_wait": {
+    "type": "float", "default": 6.0,
+    "description": "单次最大等待（秒）", "hint": "建议 2–15 秒。小于最小等待时自动提升到最小等待。"
+  },
+  "adaptive_max_total_wait": {
+    "type": "float", "default": 12.0,
+    "description": "整轮总等待上限（秒）", "hint": "建议 5–30 秒。从首条消息进入开始计时，输入状态及新消息均不延长此上限。"
+  },
+  "adaptive_short_message_threshold": {
+    "type": "int", "default": 10,
+    "description": "短消息字数阈值", "hint": "建议 5–20。累计两条短句后，最新短句等待乘以 1.5。"
+  },
+  "enable_typing_detection": {
+    "type": "bool", "default": true,
+    "description": "感知输入状态", "hint": "依赖平台上报 input_status。正在输入时暂停普通倒计时，仍保留硬上限。"
+  },
+  "max_typing_wait": {
+    "type": "float", "default": 60.0,
+    "description": "输入状态保护时间（秒）", "hint": "建议 10–300 秒。从首次输入通知开始计算，重复通知不重置；与总等待上限取较早者。"
+  },
+  "enable_recall_filter": {
+    "type": "bool", "default": true,
+    "description": "过滤已撤回消息", "hint": "收到 friend_recall 时移除本轮对应的文字、图片和引用，全部撤回后结束本轮。"
+  }
+}
